@@ -14,7 +14,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE IF NOT EXISTS traffic_users (
     user_id TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,
-    role TEXT NOT NULL CHECK(role IN ('planner','dispatcher','risk','auditor')),
+    role TEXT NOT NULL CHECK(role IN ('planner','dispatcher','risk','auditor','officer')),
     active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
     created_at TEXT NOT NULL
 );
@@ -169,6 +169,106 @@ CREATE TABLE IF NOT EXISTS response_scenario_runs (
     created_by TEXT NOT NULL REFERENCES traffic_users(user_id),
     created_at TEXT NOT NULL,
     UNIQUE(scenario_id, as_of_date, input_sha256)
+);
+
+-- 快速结算：已生效的责任认定是结算单的唯一前置
+CREATE TABLE IF NOT EXISTS liability_determinations (
+    determination_id TEXT PRIMARY KEY,
+    incident_id TEXT NOT NULL,
+    shares_json TEXT NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'effective' CHECK(state IN ('effective','revoked')),
+    revision INTEGER NOT NULL DEFAULT 1,
+    decided_by TEXT NOT NULL REFERENCES traffic_users(user_id),
+    decided_at TEXT NOT NULL,
+    revoked_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_liability_incident
+ON liability_determinations(incident_id, state);
+
+CREATE TABLE IF NOT EXISTS quick_settlements (
+    settlement_id TEXT PRIMARY KEY,
+    incident_id TEXT NOT NULL,
+    determination_id TEXT NOT NULL REFERENCES liability_determinations(determination_id),
+    fixed_items_json TEXT NOT NULL DEFAULT '[]',
+    deductibles_json TEXT NOT NULL DEFAULT '{}',
+    state TEXT NOT NULL DEFAULT 'open'
+        CHECK(state IN ('open','partially_paid','paid','settled','closed','refused','void')),
+    quote_version INTEGER NOT NULL DEFAULT 0,
+    total_amount TEXT NOT NULL DEFAULT '0.00',
+    total_deductible TEXT NOT NULL DEFAULT '0.00',
+    total_payable TEXT NOT NULL DEFAULT '0.00',
+    amount_paid TEXT NOT NULL DEFAULT '0.00',
+    amount_refunded TEXT NOT NULL DEFAULT '0.00',
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT NOT NULL REFERENCES traffic_users(user_id),
+    created_at TEXT NOT NULL,
+    settled_at TEXT,
+    closed_at TEXT,
+    UNIQUE(determination_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_settlements_incident
+ON quick_settlements(incident_id, state);
+
+CREATE TABLE IF NOT EXISTS repair_quote_versions (
+    quote_version INTEGER NOT NULL,
+    settlement_id TEXT NOT NULL REFERENCES quick_settlements(settlement_id),
+    shop_id TEXT NOT NULL,
+    shop_name TEXT NOT NULL,
+    quote_ref TEXT NOT NULL,
+    items_json TEXT NOT NULL,
+    content_sha256 TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','superseded')),
+    submitted_by TEXT NOT NULL REFERENCES traffic_users(user_id),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(settlement_id, quote_version)
+);
+
+CREATE TABLE IF NOT EXISTS party_confirmations (
+    confirmation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    settlement_id TEXT NOT NULL REFERENCES quick_settlements(settlement_id),
+    quote_version INTEGER NOT NULL,
+    party_id TEXT NOT NULL,
+    decision TEXT NOT NULL CHECK(decision IN ('confirmed','refused')),
+    note TEXT NOT NULL DEFAULT '',
+    content_sha256 TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','voided')),
+    void_reason TEXT,
+    actor_id TEXT NOT NULL REFERENCES traffic_users(user_id),
+    created_at TEXT NOT NULL,
+    voided_at TEXT,
+    FOREIGN KEY(settlement_id, quote_version) REFERENCES repair_quote_versions(settlement_id, quote_version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_confirmations_lookup
+ON party_confirmations(settlement_id, party_id, quote_version);
+
+CREATE TABLE IF NOT EXISTS settlement_payments (
+    payment_id TEXT PRIMARY KEY,
+    settlement_id TEXT NOT NULL REFERENCES quick_settlements(settlement_id),
+    direction TEXT NOT NULL CHECK(direction IN ('inbound','refund')),
+    amount TEXT NOT NULL,
+    receipt_no TEXT NOT NULL,
+    payer_party_id TEXT,
+    method TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    balance_after TEXT NOT NULL,
+    registered_by TEXT NOT NULL REFERENCES traffic_users(user_id),
+    created_at TEXT NOT NULL,
+    UNIQUE(receipt_no)
+);
+
+CREATE INDEX IF NOT EXISTS idx_payments_settlement
+ON settlement_payments(settlement_id, created_at, payment_id);
+
+CREATE TABLE IF NOT EXISTS settlement_breakdowns (
+    settlement_id TEXT NOT NULL REFERENCES quick_settlements(settlement_id),
+    quote_version INTEGER NOT NULL,
+    breakdown_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(settlement_id, quote_version)
 );
 
 CREATE TABLE IF NOT EXISTS traffic_idempotency (

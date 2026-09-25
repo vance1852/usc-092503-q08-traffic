@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .errors import TrafficDispatchError, ValidationFailed
 from .service import TrafficDispatchService
+from .settlement_service import QuickSettlementService
 from .storage import connect
 
 
@@ -24,6 +25,7 @@ class Response:
 class JsonApplication:
     def __init__(self, service: TrafficDispatchService) -> None:
         self.service = service
+        self.settlements = QuickSettlementService(service.connection, service.clock)
 
     @staticmethod
     def _actor(headers: Mapping[str, str]) -> str:
@@ -85,6 +87,29 @@ class JsonApplication:
                 return Response(200, self.service.run_scenario(actor, parts[1], payload["as_of_date"]))
             if method == "GET" and path == "/audit/chain":
                 return Response(200, self.service.audit_chain(actor))
+            # 轻微事故快速结算
+            if method == "POST" and path == "/liability_determinations":
+                return Response(201, self.settlements.record_liability(actor, payload))
+            if method == "POST" and len(parts) == 3 and parts[0] == "liability_determinations" and parts[2] == "revoke":
+                return Response(200, self.settlements.revoke_liability(actor, parts[1], payload.get("reason", "")))
+            if method == "POST" and path == "/quick_settlements":
+                return Response(201, self.settlements.create_settlement(actor, payload))
+            if method == "GET" and len(parts) == 2 and parts[0] == "quick_settlements":
+                return Response(200, self.settlements.settlement(actor, parts[1]))
+            if method == "GET" and len(parts) == 3 and parts[0] == "quick_settlements" and parts[2] == "report":
+                return Response(200, self.settlements.settlement_report(actor, parts[1]))
+            if method == "POST" and len(parts) == 3 and parts[0] == "quick_settlements" and parts[2] == "quotes":
+                return Response(201, self.settlements.submit_repair_quote(actor, parts[1], payload))
+            if method == "POST" and len(parts) == 3 and parts[0] == "quick_settlements" and parts[2] == "confirmations":
+                return Response(201, self.settlements.confirm_party(
+                    actor, parts[1], payload["party_id"], payload["decision"], payload.get("note", "")
+                ))
+            if method == "POST" and len(parts) == 3 and parts[0] == "quick_settlements" and parts[2] == "payments":
+                return Response(201, self.settlements.register_payment(actor, parts[1], payload))
+            if method == "POST" and len(parts) == 3 and parts[0] == "quick_settlements" and parts[2] == "settle":
+                return Response(200, self.settlements.settle(actor, parts[1]))
+            if method == "POST" and len(parts) == 3 and parts[0] == "quick_settlements" and parts[2] == "close":
+                return Response(200, self.settlements.close_case(actor, parts[1], payload.get("result", "settled")))
             return Response(404, {"error": {"code": "route_not_found", "message": "接口不存在"}})
         except TrafficDispatchError as exc:
             return Response(exc.status, {"error": {"code": exc.code, "message": str(exc)}})

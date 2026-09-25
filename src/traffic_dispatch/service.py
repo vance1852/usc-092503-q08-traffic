@@ -35,6 +35,17 @@ ROLE_PERMISSIONS = {
     "dispatcher": {"dispatch_request.write", "allocation.run", "deployment.write", "inventory.write"},
     "risk": {"outage.write", "scenario.approve", "report.read"},
     "auditor": {"report.read", "audit.read"},
+    # 办案人员：在事故快处中心处理责任认定与快速结算单
+    "officer": {
+        "liability.write",
+        "settlement.write",
+        "quote.write",
+        "confirmation.write",
+        "payment.write",
+        "settlement.settle",
+        "case.close",
+        "report.read",
+    },
 }
 
 
